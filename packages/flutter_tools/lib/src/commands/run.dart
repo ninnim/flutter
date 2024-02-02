@@ -7,6 +7,7 @@
 import 'dart:async';
 
 import 'package:meta/meta.dart';
+import 'package:unified_analytics/unified_analytics.dart' as analytics;
 import 'package:vm_service/vm_service.dart';
 
 import '../android/android_device.dart';
@@ -145,16 +146,20 @@ abstract class RunCommandBase extends FlutterCommand with DeviceBasedDevelopment
       )
       ..addFlag('enable-software-rendering',
         negatable: false,
-        help: 'Enable rendering using the Skia software backend. '
+        help: '(deprecated) Enable rendering using the Skia software backend. '
             'This is useful when testing Flutter on emulators. By default, '
             'Flutter will attempt to either use OpenGL or Vulkan and fall back '
-            'to software when neither is available.',
+            'to software when neither is available. This option is not supported '
+            'when using the Impeller rendering engine.',
+        hide: !verboseHelp,
       )
       ..addFlag('skia-deterministic-rendering',
         negatable: false,
-        help: 'When combined with "--enable-software-rendering", this should provide completely '
+        help: '(deprecated) When combined with "--enable-software-rendering", this should provide completely '
             'deterministic (i.e. reproducible) Skia rendering. This is useful for testing purposes '
-            '(e.g. when comparing screenshots).',
+            '(e.g. when comparing screenshots). This option is not supported '
+            'when using the Impeller rendering engine.',
+        hide: !verboseHelp,
       )
       ..addMultiOption('dart-entrypoint-args',
         abbr: 'a',
@@ -311,6 +316,7 @@ class RunCommand extends RunCommandBase {
     requiresPubspecYaml();
     usesFilesystemOptions(hide: !verboseHelp);
     usesExtraDartFlagOptions(verboseHelp: verboseHelp);
+    usesFrontendServerStarterPathOption(verboseHelp: verboseHelp);
     addEnableExperimentation(hide: !verboseHelp);
     usesInitializeFromDillOption(hide: !verboseHelp);
 
@@ -426,6 +432,43 @@ class RunCommand extends RunCommandBase {
 
   @override
   Future<CustomDimensions> get usageValues async {
+    final AnalyticsUsageValuesRecord record = await _sharedAnalyticsUsageValues;
+
+    return CustomDimensions(
+      commandRunIsEmulator: record.runIsEmulator,
+      commandRunTargetName: record.runTargetName,
+      commandRunTargetOsVersion: record.runTargetOsVersion,
+      commandRunModeName: record.runModeName,
+      commandRunProjectModule: record.runProjectModule,
+      commandRunProjectHostLanguage: record.runProjectHostLanguage,
+      commandRunAndroidEmbeddingVersion: record.runAndroidEmbeddingVersion,
+      commandRunEnableImpeller: record.runEnableImpeller,
+      commandRunIOSInterfaceType: record.runIOSInterfaceType,
+      commandRunIsTest: record.runIsTest,
+    );
+  }
+
+  @override
+  Future<analytics.Event> unifiedAnalyticsUsageValues(String commandPath) async {
+    final AnalyticsUsageValuesRecord record = await _sharedAnalyticsUsageValues;
+
+    return analytics.Event.commandUsageValues(
+      workflow: commandPath,
+      commandHasTerminal: hasTerminal,
+      runIsEmulator: record.runIsEmulator,
+      runTargetName: record.runTargetName,
+      runTargetOsVersion: record.runTargetOsVersion,
+      runModeName: record.runModeName,
+      runProjectModule: record.runProjectModule,
+      runProjectHostLanguage: record.runProjectHostLanguage,
+      runAndroidEmbeddingVersion: record.runAndroidEmbeddingVersion,
+      runEnableImpeller: record.runEnableImpeller,
+      runIOSInterfaceType: record.runIOSInterfaceType,
+      runIsTest: record.runIsTest,
+    );
+  }
+
+  late final Future<AnalyticsUsageValuesRecord> _sharedAnalyticsUsageValues = (() async {
     String deviceType, deviceOsVersion;
     bool isEmulator;
     bool anyAndroidDevices = false;
@@ -491,19 +534,19 @@ class RunCommand extends RunCommandBase {
 
     final BuildInfo buildInfo = await getBuildInfo();
     final String modeName = buildInfo.modeName;
-    return CustomDimensions(
-      commandRunIsEmulator: isEmulator,
-      commandRunTargetName: deviceType,
-      commandRunTargetOsVersion: deviceOsVersion,
-      commandRunModeName: modeName,
-      commandRunProjectModule: FlutterProject.current().isModule,
-      commandRunProjectHostLanguage: hostLanguage.join(','),
-      commandRunAndroidEmbeddingVersion: androidEmbeddingVersion,
-      commandRunEnableImpeller: enableImpeller.asBool,
-      commandRunIOSInterfaceType: iOSInterfaceType,
-      commandRunIsTest: targetFile.endsWith('_test.dart'),
+    return (
+      runIsEmulator: isEmulator,
+      runTargetName: deviceType,
+      runTargetOsVersion: deviceOsVersion,
+      runModeName: modeName,
+      runProjectModule: FlutterProject.current().isModule,
+      runProjectHostLanguage: hostLanguage.join(','),
+      runAndroidEmbeddingVersion: androidEmbeddingVersion,
+      runEnableImpeller: enableImpeller.asBool,
+      runIOSInterfaceType: iOSInterfaceType,
+      runIsTest: targetFile.endsWith('_test.dart'),
     );
-  }
+  })();
 
   @override
   bool get shouldRunPub {
@@ -682,19 +725,6 @@ class RunCommand extends RunCommandBase {
           throwToolExit('Hot reload is not supported by ${device.name}. Run with "--no-hot".');
         }
       }
-      if (await device.isLocalEmulator && await device.supportsHardwareRendering) {
-        if (boolArg('enable-software-rendering')) {
-          globals.printStatus(
-            'Using software rendering with device ${device.name}. You may get better performance '
-            'with hardware mode by configuring hardware rendering for your device.'
-           );
-        } else {
-          globals.printStatus(
-            'Using hardware rendering with device ${device.name}. If you notice graphics artifacts, '
-            'consider enabling software rendering with "--enable-software-rendering".'
-          );
-        }
-      }
     }
 
     List<String>? expFlags;
@@ -791,3 +821,17 @@ class RunCommand extends RunCommandBase {
     );
   }
 }
+
+/// Schema for the usage values to send for analytics reporting.
+typedef AnalyticsUsageValuesRecord = ({
+  String? runAndroidEmbeddingVersion,
+  bool? runEnableImpeller,
+  String? runIOSInterfaceType,
+  bool runIsEmulator,
+  bool runIsTest,
+  String runModeName,
+  String runProjectHostLanguage,
+  bool runProjectModule,
+  String runTargetName,
+  String runTargetOsVersion,
+});

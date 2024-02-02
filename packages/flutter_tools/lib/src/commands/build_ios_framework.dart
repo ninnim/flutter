@@ -270,6 +270,28 @@ class BuildIOSFrameworkCommand extends BuildFrameworkCommand {
 
       final Status status = globals.logger.startProgress(
         ' └─Moving to ${globals.fs.path.relative(modeDirectory.path)}');
+
+      // Copy the native assets. The native assets have already been signed in
+      // buildNativeAssetsMacOS.
+      final Directory nativeAssetsDirectory = globals.fs
+          .directory(getBuildDirectory())
+          .childDirectory('native_assets/ios/');
+      if (await nativeAssetsDirectory.exists()) {
+        final ProcessResult rsyncResult = await globals.processManager.run(<Object>[
+          'rsync',
+          '-av',
+          '--filter',
+          '- .DS_Store',
+          '--filter',
+          '- native_assets.yaml',
+          nativeAssetsDirectory.path,
+          modeDirectory.path,
+        ]);
+        if (rsyncResult.exitCode != 0) {
+          throwToolExit('Failed to copy native assets:\n${rsyncResult.stderr}');
+        }
+      }
+
       try {
         // Delete the intermediaries since they would have been copied into our
         // output frameworks.
@@ -352,7 +374,7 @@ LICENSE
   s.author                = { 'Flutter Dev Team' => 'flutter-dev@googlegroups.com' }
   s.source                = { :http => '${cache.storageBaseUrl}/flutter_infra_release/flutter/${cache.engineRevision}/$artifactsMode/artifacts.zip' }
   s.documentation_url     = 'https://flutter.dev/docs'
-  s.platform              = :ios, '11.0'
+  s.platform              = :ios, '12.0'
   s.vendored_frameworks   = 'Flutter.xcframework'
 end
 ''';

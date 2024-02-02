@@ -20,6 +20,7 @@ import 'package:flutter_tools/src/globals.dart' as globals;
 import 'package:flutter_tools/src/project.dart';
 import 'package:meta/meta.dart';
 import 'package:test/fake.dart';
+import 'package:unified_analytics/unified_analytics.dart';
 
 import '../../src/common.dart';
 import '../../src/context.dart';
@@ -33,20 +34,25 @@ void main() {
   late FakeBundleBuilder fakeBundleBuilder;
   final FileSystemStyle fileSystemStyle = globals.fs.path.separator == '/' ?
     FileSystemStyle.posix : FileSystemStyle.windows;
+  late FakeAnalytics fakeAnalytics;
+
+  MemoryFileSystem fsFactory() {
+    return MemoryFileSystem.test(style: fileSystemStyle);
+  }
 
   setUp(() {
     tempDir = globals.fs.systemTempDirectory.createTempSync('flutter_tools_packages_test.');
 
     fakeBundleBuilder = FakeBundleBuilder();
+    fakeAnalytics = getInitializedFakeAnalyticsInstance(
+      fs: fsFactory(),
+      fakeFlutterVersion: FakeFlutterVersion(),
+    );
   });
 
   tearDown(() {
     tryToDelete(tempDir);
   });
-
-  MemoryFileSystem fsFactory() {
-    return MemoryFileSystem.test(style: fileSystemStyle);
-  }
 
   Future<BuildBundleCommand> runCommandIn(String projectPath, { List<String>? arguments }) async {
     final BuildBundleCommand command = BuildBundleCommand(
@@ -70,6 +76,19 @@ void main() {
     final BuildBundleCommand command = await runCommandIn(projectPath);
 
     expect((await command.usageValues).commandBuildBundleIsModule, true);
+    expect(
+      fakeAnalytics.sentEvents,
+      contains(
+        Event.commandUsageValues(
+          workflow: 'bundle',
+          commandHasTerminal: false,
+          buildBundleTargetPlatform: 'android-arm',
+          buildBundleIsModule: true,
+        ),
+      ),
+    );
+  }, overrides: <Type, Generator>{
+    Analytics: () => fakeAnalytics,
   });
 
   testUsingContext('bundle getUsage indicate that project is not a module', () async {
@@ -79,6 +98,19 @@ void main() {
     final BuildBundleCommand command = await runCommandIn(projectPath);
 
     expect((await command.usageValues).commandBuildBundleIsModule, false);
+    expect(
+      fakeAnalytics.sentEvents,
+      contains(
+        Event.commandUsageValues(
+          workflow: 'bundle',
+          commandHasTerminal: false,
+          buildBundleTargetPlatform: 'android-arm',
+          buildBundleIsModule: false,
+        ),
+      ),
+    );
+  }, overrides: <Type, Generator>{
+    Analytics: () => fakeAnalytics,
   });
 
   testUsingContext('bundle getUsage indicate the target platform', () async {
@@ -559,6 +591,42 @@ void main() {
     ProcessManager: () => FakeProcessManager.any(),
   });
 
+  testUsingContext('values from --dart-define supersede values from --dart-define-from-file', () async {
+    globals.fs
+        .file(globals.fs.path.join('lib', 'main.dart'))
+        .createSync(recursive: true);
+    globals.fs.file('pubspec.yaml').createSync();
+    globals.fs.file('.packages').createSync();
+    globals.fs.file('.env').writeAsStringSync('''
+        MY_VALUE=VALUE_FROM_ENV_FILE
+      ''');
+    final CommandRunner<void> runner =
+        createTestCommandRunner(BuildBundleCommand(
+      logger: BufferLogger.test(),
+    ));
+
+    await runner.run(<String>[
+      'bundle',
+      '--no-pub',
+      '--dart-define=MY_VALUE=VALUE_FROM_COMMAND',
+      '--dart-define-from-file=.env',
+    ]);
+
+  }, overrides: <Type, Generator>{
+    BuildSystem: () => TestBuildSystem.all(BuildResult(success: true),
+            (Target target, Environment environment) {
+          expect(
+            _decodeDartDefines(environment),
+            containsAllInOrder(const <String>[
+              'MY_VALUE=VALUE_FROM_ENV_FILE',
+              'MY_VALUE=VALUE_FROM_COMMAND',
+            ]),
+          );
+        }),
+    FileSystem: fsFactory,
+    ProcessManager: () => FakeProcessManager.any(),
+  });
+
   testUsingContext('--dart-define-from-file correctly parses a valid env file', () async {
     globals.fs
         .file(globals.fs.path.join('lib', 'main.dart'))
@@ -763,7 +831,7 @@ void main() {
       'bundle',
       '--no-pub',
       '--dart-define-from-file=config',
-    ]), throwsToolExit(message: 'Json config define file "--dart-define-from-file=config" is not a file, please fix first!'));
+    ]), throwsToolExit(message: 'Did not find the file passed to "--dart-define-from-file". Path: config'));
   }, overrides: <Type, Generator>{
     FileSystem: fsFactory,
     BuildSystem: () => TestBuildSystem.all(BuildResult(success: true)),
@@ -820,6 +888,7 @@ class FakeBundleBuilder extends Fake implements BundleBuilder {
     String? applicationKernelFilePath,
     String? depfilePath,
     String? assetDirPath,
+    Uri? nativeAssets,
     @visibleForTesting BuildSystem? buildSystem,
   }) async {}
 }
